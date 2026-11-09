@@ -1,265 +1,207 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
-import 'package:flutter/services.dart';
+import 'package:get/get.dart';
+import '../../controllers/auth_controller.dart';
+import '../../controllers/home_controller.dart';
+import '../../routes/route_name.dart';
 import '../../utilities/colors.dart';
-
-class CarFrame {
-  const CarFrame(this.asset, this.label);
-
-  final String asset;
-  final String label;
-}
+import '../../utilities/constants.dart';
+import '../../utilities/helper.dart';
+import '../../utilities/typography.dart';
+import '../../widgets/custom_button.dart';
+import '../../widgets/transaction_item.dart';
+import '../history/transaction_detail_sheet.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
-  static const _frames = [
-    CarFrame('assets/front.png', 'Depan'),
-    CarFrame('assets/side.png', 'Samping'),
-    CarFrame('assets/rear.png', 'Belakang'),
-    CarFrame('assets/top.png', 'Atas'),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final homeController = Get.find<HomeController>();
+    final authController = Get.isRegistered<AuthController>()
+        ? Get.find<AuthController>()
+        : Get.put(AuthController());
+
     return Scaffold(
-      backgroundColor: AppColors.surface,
-      appBar: AppBar(
-        backgroundColor: AppColors.primary,
-        elevation: 0,
-        centerTitle: true,
-        title: const Text(
-          'Car Viewer 360',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-        ),
-      ),
-      body: const SafeArea(
-        child: Center(
+      backgroundColor: AppColors.ground,
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: homeController.refreshDashboard,
+          color: AppColors.accent,
           child: SingleChildScrollView(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-            child: Car360Viewer(frames: HomePage._frames),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class Car360Viewer extends StatefulWidget {
-  const Car360Viewer({
-    super.key,
-    required this.frames,
-    this.dragSensitivity = 220,
-  });
-
-  final List<CarFrame> frames;
-  final double dragSensitivity;
-
-  @override
-  State<Car360Viewer> createState() => _Car360ViewerState();
-}
-
-class _Car360ViewerState extends State<Car360Viewer>
-    with SingleTickerProviderStateMixin {
-  static const _spring = SpringDescription(
-    mass: 1,
-    stiffness: 110,
-    damping: 21,
-  );
-
-  late final AnimationController _controller;
-  int _lastHapticIndex = 0;
-
-  int get _count => widget.frames.length;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController.unbounded(vsync: this, value: 0);
-    _controller.addListener(_onPositionChanged);
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    for (final frame in widget.frames) {
-      precacheImage(AssetImage(frame.asset), context);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.removeListener(_onPositionChanged);
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _onPositionChanged() {
-    final index = _controller.value.round() % _count;
-    if (index != _lastHapticIndex) {
-      _lastHapticIndex = index;
-      HapticFeedback.selectionClick();
-    }
-  }
-
-  void _settleTo(double target, double velocity) {
-    _controller.animateWith(
-      SpringSimulation(_spring, _controller.value, target, velocity),
-    );
-  }
-
-  void _onDragStart(DragStartDetails details) {
-    _controller.stop();
-  }
-
-  void _onDragUpdate(DragUpdateDetails details) {
-    _controller.value -= details.delta.dx / widget.dragSensitivity;
-  }
-
-  void _onDragEnd(DragEndDetails details) {
-    final velocity =
-        -details.velocity.pixelsPerSecond.dx / widget.dragSensitivity;
-    final clamped = velocity.clamp(-6.0, 6.0);
-    final target = (_controller.value + clamped * 0.18).roundToDouble();
-    _settleTo(target, clamped);
-  }
-
-  void _step(int direction) {
-    _controller.stop();
-    _settleTo(_controller.value.roundToDouble() + direction, 0);
-  }
-
-  void _goTo(int index) {
-    _controller.stop();
-    final current = _controller.value;
-    final wrapped = current % _count;
-    var delta = index - wrapped;
-    if (delta > _count / 2) delta -= _count;
-    if (delta < -_count / 2) delta += _count;
-    _settleTo(current + delta, 0);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final width = math.min(MediaQuery.sizeOf(context).width - 32, 560.0);
-
-    return SizedBox(
-      width: width,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, _) {
-          final position = _controller.value;
-          final wrapped = position % _count;
-          final current = wrapped.floor() % _count;
-          final next = (current + 1) % _count;
-          final raw = wrapped - wrapped.floor();
-          final blend = raw * raw * (3 - 2 * raw);
-          final active = wrapped.round() % _count;
-
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onHorizontalDragStart: _onDragStart,
-                onHorizontalDragUpdate: _onDragUpdate,
-                onHorizontalDragEnd: _onDragEnd,
-                child: _ViewerCard(
-                  current: widget.frames[current].asset,
-                  next: widget.frames[next].asset,
-                  blend: blend,
-                ),
-              ),
-              const SizedBox(height: 20),
-              _LabelSwitcher(
-                label: widget.frames[active].label,
-                index: active,
-                count: _count,
-              ),
-              const SizedBox(height: 16),
-              _Controls(
-                count: _count,
-                active: active,
-                onPrev: () => _step(-1),
-                onNext: () => _step(1),
-                onDot: _goTo,
-              ),
-              const SizedBox(height: 20),
-              const _SwipeHint(),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ViewerCard extends StatelessWidget {
-  const _ViewerCard({
-    required this.current,
-    required this.next,
-    required this.blend,
-  });
-
-  final String current;
-  final String next;
-  final double blend;
-
-  static const _shift = 18.0;
-  static const _zoom = 1.06;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 28,
-            offset: const Offset(0, 14),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
-        child: AspectRatio(
-          aspectRatio: 4 / 3,
-          child: RepaintBoundary(
-            child: Stack(
-              fit: StackFit.expand,
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppConstants.screenPadding,
+              vertical: 16,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Transform.translate(
-                  offset: Offset(-blend * _shift, 0),
-                  child: Transform.scale(
-                    scale: _zoom,
-                    child: Image.asset(
-                      current,
-                      fit: BoxFit.cover,
+                // Header: Avatar, Greeting, Notifications
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.ink,
+                        borderRadius: BorderRadius.circular(AppConstants.radius),
+                      ),
                       alignment: Alignment.center,
-                      gaplessPlayback: true,
-                      filterQuality: FilterQuality.medium,
+                      child: Obx(() {
+                        final initials =
+                            authController.merchant.value?.avatarInitials ?? 'WM';
+                        return Text(
+                          initials,
+                          style: const TextStyle(
+                            fontFamily: 'Poppins',
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        );
+                      }),
                     ),
-                  ),
-                ),
-                Opacity(
-                  opacity: blend,
-                  child: Transform.translate(
-                    offset: Offset((1 - blend) * _shift, 0),
-                    child: Transform.scale(
-                      scale: _zoom,
-                      child: Image.asset(
-                        next,
-                        fit: BoxFit.cover,
-                        alignment: Alignment.center,
-                        gaplessPlayback: true,
-                        filterQuality: FilterQuality.medium,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Halo,',
+                            style: TextStyle(
+                              fontFamily: 'Poppins',
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                          Obx(() {
+                            final name =
+                                authController.merchant.value?.name ?? 'Warung Maju';
+                            return Text(
+                              name,
+                              style: AppTypography.sectionTitle,
+                            );
+                          }),
+                        ],
                       ),
                     ),
-                  ),
+                    InkWell(
+                      onTap: () {
+                        Get.toNamed(RouteName.summary);
+                      },
+                      borderRadius: BorderRadius.circular(AppConstants.radius),
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: AppColors.surface,
+                          borderRadius: BorderRadius.circular(AppConstants.radius),
+                          border: Border.all(color: AppColors.line),
+                        ),
+                        child: const Icon(
+                          Icons.bar_chart_rounded,
+                          color: AppColors.ink,
+                          size: 22,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 20),
+
+                // Balance Card (Dark Ink Container)
+                _buildBalanceCard(homeController),
+                const SizedBox(height: 20),
+
+                // Primary Action Button: Terima Pembayaran
+                CustomButton(
+                  text: 'Terima pembayaran',
+                  enableShine: true,
+                  icon: const Icon(Icons.contactless_rounded, color: Colors.white, size: 24),
+                  onPressed: () {
+                    Get.toNamed(RouteName.nominal);
+                  },
+                ),
+                const SizedBox(height: 28),
+
+                // Section: Transaksi Terbaru
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Transaksi terbaru',
+                      style: AppTypography.sectionTitle,
+                    ),
+                    InkWell(
+                      onTap: () {
+                        // Switch to Riwayat tab or Summary
+                        Get.toNamed(RouteName.summary);
+                      },
+                      child: const Text(
+                        'Ringkasan',
+                        style: TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+
+                // Recent Transactions List
+                Obx(() {
+                  final recents = homeController.recentTransactions;
+                  if (homeController.isLoading.value && recents.isEmpty) {
+                    return const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(32),
+                        child: CircularProgressIndicator(color: AppColors.accent),
+                      ),
+                    );
+                  }
+
+                  if (recents.isEmpty) {
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(28),
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(AppConstants.radiusCard),
+                        border: Border.all(color: AppColors.line),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Text(
+                        'Belum ada transaksi hari ini',
+                        style: TextStyle(
+                          fontFamily: 'Poppins',
+                          fontSize: 14,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    );
+                  }
+
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: recents.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final item = recents[index];
+                      return TransactionItem(
+                        transaction: item,
+                        onTap: () {
+                          TransactionDetailSheet.show(context, item);
+                        },
+                      );
+                    },
+                  );
+                }),
+                const SizedBox(height: 24),
               ],
             ),
           ),
@@ -267,147 +209,166 @@ class _ViewerCard extends StatelessWidget {
       ),
     );
   }
-}
 
-class _LabelSwitcher extends StatelessWidget {
-  const _LabelSwitcher({
-    required this.label,
-    required this.index,
-    required this.count,
-  });
-
-  final String label;
-  final int index;
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        AnimatedSwitcher(
-          duration: const Duration(milliseconds: 220),
-          transitionBuilder: (child, animation) => FadeTransition(
-            opacity: animation,
-            child: SlideTransition(
-              position: Tween<Offset>(
-                begin: const Offset(0, 0.25),
-                end: Offset.zero,
-              ).animate(animation),
-              child: child,
+  Widget _buildBalanceCard(HomeController controller) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: AppColors.ink,
+        borderRadius: BorderRadius.circular(AppConstants.radiusBalance),
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Penjualan hari ini',
+            style: TextStyle(
+              fontFamily: 'Poppins',
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: AppColors.onDarkMuted,
             ),
           ),
-          child: Text(
-            label,
-            key: ValueKey(label),
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.3,
+          const SizedBox(height: 6),
+          Obx(() {
+            final total = controller.summary.value?.totalSalesToday ?? 2847500;
+            return Text(
+              Helper.formatRupiah(total),
+              style: AppTypography.balanceTotal,
+            );
+          }),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              const Icon(Icons.arrow_drop_up, color: Color(0xFF00D54B), size: 18),
+              Text(
+                '12% dari kemarin',
+                style: const TextStyle(
+                  fontFamily: 'Poppins',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF00D54B),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Sparkline mini chart
+          SizedBox(
+            height: 40,
+            width: double.infinity,
+            child: CustomPaint(
+              painter: _SparklinePainter(),
             ),
+          ),
+          const SizedBox(height: 16),
+          const Divider(color: Colors.white12, height: 1),
+          const SizedBox(height: 16),
+
+          // Statistics: Transaksi, Rata-rata, Berhasil
+          Obx(() {
+            final s = controller.summary.value;
+            final count = s?.todayTransactionCount ?? 12;
+            final avg = s?.todayAverageTicket ?? 237000;
+            final rate = s?.todaySuccessRate ?? 92;
+
+            return Row(
+              children: [
+                Expanded(
+                  child: _buildStatItem('Transaksi', count.toString()),
+                ),
+                Container(width: 1, height: 28, color: Colors.white12),
+                Expanded(
+                  child: _buildStatItem('Rata-rata', Helper.formatRupiahShort(avg)),
+                ),
+                Container(width: 1, height: 28, color: Colors.white12),
+                Expanded(
+                  child: _buildStatItem('Berhasil', '$rate%'),
+                ),
+              ],
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontFamily: 'Poppins',
+            fontSize: 11,
+            fontWeight: FontWeight.w500,
+            color: AppColors.onDarkMuted,
           ),
         ),
         const SizedBox(height: 4),
         Text(
-          '${index + 1} / $count',
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+          value,
+          style: const TextStyle(
+            fontFamily: 'Poppins',
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            color: Colors.white,
+          ),
         ),
       ],
     );
   }
 }
 
-class _Controls extends StatelessWidget {
-  const _Controls({
-    required this.count,
-    required this.active,
-    required this.onPrev,
-    required this.onNext,
-    required this.onDot,
-  });
+class _SparklinePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final points = [
+      Offset(0, size.height * 0.8),
+      Offset(size.width * 0.15, size.height * 0.65),
+      Offset(size.width * 0.35, size.height * 0.7),
+      Offset(size.width * 0.55, size.height * 0.35),
+      Offset(size.width * 0.75, size.height * 0.45),
+      Offset(size.width, size.height * 0.15),
+    ];
 
-  final int count;
-  final int active;
-  final VoidCallback onPrev;
-  final VoidCallback onNext;
-  final ValueChanged<int> onDot;
+    final path = Path();
+    path.moveTo(points[0].dx, points[0].dy);
+    for (var i = 1; i < points.length; i++) {
+      final p0 = points[i - 1];
+      final p1 = points[i];
+      final cx = (p0.dx + p1.dx) / 2;
+      path.cubicTo(cx, p0.dy, cx, p1.dy, p1.dx, p1.dy);
+    }
+
+    final fillPath = Path.from(path)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    final fillPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          AppColors.accent.withValues(alpha: 0.35),
+          AppColors.accent.withValues(alpha: 0.0),
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
+
+    canvas.drawPath(fillPath, fillPaint);
+
+    final linePaint = Paint()
+      ..color = AppColors.accentSoft
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawPath(path, linePaint);
+  }
 
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _RoundButton(icon: Icons.chevron_left_rounded, onTap: onPrev),
-        const SizedBox(width: 16),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(count, (i) {
-            final selected = i == active;
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => onDot(i),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeOutCubic,
-                  width: selected ? 26 : 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: selected ? AppColors.primary : Colors.black26,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-            );
-          }),
-        ),
-        const SizedBox(width: 16),
-        _RoundButton(icon: Icons.chevron_right_rounded, onTap: onNext),
-      ],
-    );
-  }
-}
-
-class _RoundButton extends StatelessWidget {
-  const _RoundButton({required this.icon, required this.onTap});
-
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      shape: const CircleBorder(),
-      elevation: 2,
-      shadowColor: Colors.black26,
-      child: InkWell(
-        customBorder: const CircleBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Icon(icon, color: AppColors.primary, size: 26),
-        ),
-      ),
-    );
-  }
-}
-
-class _SwipeHint extends StatelessWidget {
-  const _SwipeHint();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.swipe_rounded, size: 18, color: Colors.grey.shade600),
-        const SizedBox(width: 8),
-        Text(
-          'Geser kiri / kanan untuk memutar',
-          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-        ),
-      ],
-    );
-  }
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
